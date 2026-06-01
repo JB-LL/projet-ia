@@ -1,0 +1,6 @@
+*.class
+train/
+test/
+.idea/
+.vscode/
+*.iml
