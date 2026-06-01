@@ -4,3 +4,4 @@ test/
 .idea/
 .vscode/
 *.iml
+cerveau_*.txt
