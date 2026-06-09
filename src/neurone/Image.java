@@ -1,66 +1,72 @@
-import java.io.*;
-import java.util.*;
-import javax.imageio.*;
+import java.awt.Color;
 import java.awt.image.*;
+import java.io.*;
 import java.nio.file.*;
+import java.util.*;
 import java.util.stream.*;
-import java.awt.Color; 
-
+import javax.imageio.*;
+ 
 public class Image
 {
     static private int LabelChat = 0;
     static private int LabelChien = 1;
+    static private int LabelWild = 2;
+    static private int LabelInconnu = 3;
     private int label = -1;
     private int largeur = 0;
     private int hauteur = 0;
-    private int[] donnees = null; 
-
+    private int[] donnees = null; // image applatie en concaténant les lignes les unes après les autres
+ 
+    // --- ACCESSEURS ---
     public int label() {return label;}
     public int largeur() {return largeur;}
     public int hauteur() {return hauteur;}
-    public int taille() {return donnees.length;} 
+    public int taille() {return donnees.length;}  // nombre de pixels: hauteur*largeur ou 3*hauteur*largeur pour une image RGB
     public int[] donnees() {return donnees;}
-
+ 
     public boolean estEnNiveauxDeGris() {return taille() == largeur() * hauteur();}
-
+ 
     public void afficheMetadonnees() {
-        String type = estEnNiveauxDeGris() ? "grayscale" : " 3-canaux (RGB/TSL)";
+        String type = estEnNiveauxDeGris() ? "grayscale" : " couleurs/TSL";
         System.out.printf("Image (%s): label=%d, largeur=%d, hauteur=%d, taille=%d\n",
             type, label(), largeur(), hauteur(), taille());
     }
-
+ 
+    // --- CONSTRUCTEUR MODIFIÉ (GRIS, RGB, TSL) ---
     public Image(final String cheminImage, int label, int modeCouleur) {
         try {
             final BufferedImage img = ImageIO.read(new File(cheminImage));
             this.label = label;
             largeur = img.getWidth(null);
             hauteur = img.getHeight(null);
-            
+           
+            // Si on est en gris, on a 1 valeur par pixel. En RGB/TSL, on a 3 canaux (R,G,B ou T,S,L)
             final int taille = (modeCouleur == 1) ? hauteur * largeur : 3 * hauteur * largeur;
             donnees = new int[taille];
-            
+           
             for (int i = 0; i < hauteur; ++i) {
                 for (int j = 0; j < largeur; ++j) {
                     final long rgb = img.getRGB(j, i);
-                    final int r = (int)((rgb>>16)&255); 
-                    final int g = (int)((rgb>>8)&255);  
-                    final int b = (int)((rgb)&255);     
+                    final int r = (int)((rgb>>16)&255); // Isoler la composante rouge
+                    final int g = (int)((rgb>>8)&255);  // Isoler la composante verte
+                    final int b = (int)((rgb)&255);  // Isoler la composante bleue  
                     final int index = i * largeur + j;
-                    
-                    if (modeCouleur == 1) { 
-                        final float gris = 0.2125f * r + 0.7154f * g + 0.0721f * b; 
+                   
+                    if (modeCouleur == 1) { // 1 = GRIS
+                        final float gris = 0.2125f * r + 0.7154f * g + 0.0721f * b;
                         donnees[index] = (int) Math.max(0, Math.min(255, gris));
                     }
-                    else if (modeCouleur == 2) { 
+                    else if (modeCouleur == 2) { // 2 = RGB
                         donnees[3*index+0] = r;
                         donnees[3*index+1] = g;
                         donnees[3*index+2] = b;
                     }
-                    else if (modeCouleur == 3) { 
+                    else if (modeCouleur == 3) { // 3 = TSL
                         float[] tsl = Color.RGBtoHSB(r, g, b, null);
-                        donnees[3*index+0] = (int)(tsl[0] * 255.0f); 
-                        donnees[3*index+1] = (int)(tsl[1] * 255.0f); 
-                        donnees[3*index+2] = (int)(tsl[2] * 255.0f); 
+                        // On multiplie par 255 pour garder la même échelle que le RGB/Gris
+                        donnees[3*index+0] = (int)(tsl[0] * 255.0f);
+                        donnees[3*index+1] = (int)(tsl[1] * 255.0f);
+                        donnees[3*index+2] = (int)(tsl[2] * 255.0f);
                     }
                 }
             }
@@ -70,330 +76,365 @@ public class Image
             System.err.printf("Image non trouvee ou non lisible: %s\n", cheminImage);
         }
     }
-
+ 
+    // --- METHODE DE RECHERCHE DE FICHIERS ---
     public static List<String> listeFichiers(String repertoire) {
         List<String> cheminsFichiers = null;
         try {
-            cheminsFichiers = Files.walk(Paths.get(repertoire)) 
-                .filter(Files::isRegularFile)                  
-                .map(Path::toAbsolutePath)                      
-                .map(Path::toString)                            
-                .collect(Collectors.toList());                  
+            cheminsFichiers = Files.walk(Paths.get(repertoire)) // Récupère les chemins
+                .filter(Files::isRegularFile)      // filtre uniquement les fichiers            
+                .map(Path::toAbsolutePath)         // convertit le chemin en chemin absolu              
+                .map(Path::toString)               // convertit le chemin en chaine de caractères             
+                .collect(Collectors.toList());     // crée une collection à partir de ces chaînes            
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Dossier introuvable : " + repertoire);
         }
         return cheminsFichiers;
     }
 
+
+    // Préparation des cibles pour nos experts
+    // Un neurone expert (ex: expert Chat) doit s'activer (valoir 1) uniquement si c'est un chat, et valoir 0 pour le reste.
+    // Cette fonction transforme notre liste globale de labels en une cible spécifique pour l'expert 'k' (chient, chat ou sauvage).
+    public static float[] consignes(List<Integer> labels, int k) {
+        float[] c = new float[labels.size()];
+        for (int i = 0; i < labels.size(); i++)
+            c[i] = labels.get(i) == k ? 1.0f : 0.0f; // 1 si c'est la bonne classe, 0 sinon
+        return c;
+    }
+
+    // Algorithme de mélange : on mélange nos données d'entraînement pour éviter que le réseau n'apprenne par cœur un ordre précis (ex: d'abord tous les chats, puis tous les chiens), ce qui fausserait l'apprentissage.
+    public static void melanger(float[][] entrees, List<Integer> labels, long graine) {
+        Random rand = new Random(graine);
+        for (int i = entrees.length - 1; i > 0; i--) {
+            int j = rand.nextInt(i + 1);
+            
+            // Swap des entrées
+            float[] tmpE = entrees[i]; 
+            entrees[i] = entrees[j]; 
+            entrees[j] = tmpE;
+            
+            // Swap des labels correspondant pour ne pas perdre l'association image/label
+            int tmpL = labels.get(i); 
+            labels.set(i, labels.get(j)); 
+            labels.set(j, tmpL);
+        }
+    }
+
+    // --- FONCTIONS D'AUGMENTATION DE DONNÉES ---
+    
+    // 1. Miroir : (Pour le réseau, un chat qui regarde à gauche ou à droite reste un chat. Ça rend le neurone plus robuste.)
+    public static int[] creerMiroir(int[] pixels, int largeur, int hauteur, int modeCouleur) {
+        int[] miroir = new int[pixels.length];
+        int nbCanaux = (modeCouleur == 1) ? 1 : 3;
+        for (int i = 0; i < hauteur; i++) {
+            for (int j = 0; j < largeur; j++) {
+                int idxOrig = (i * largeur + j) * nbCanaux;
+                int idxDest = (i * largeur + (largeur - 1 - j)) * nbCanaux;
+                for (int c = 0; c < nbCanaux; c++) {
+                    miroir[idxDest + c] = pixels[idxOrig + c];
+                }
+            }
+        }
+        return miroir;
+    }
+
+    // 2. Égalisation d'histogramme: permet de mieux répartir la lumière et les contrastes sur l'image.
+    // L'objectif est d'éviter que des photos trop sombres ou trop claires ne perturbent le neurone.
+    public static void egaliserHistogramme(int[] pixels, int modeCouleur) {
+        int nbCanaux = (modeCouleur == 1) ? 1 : 3;
+        
+        int canalDebut = (modeCouleur == 3) ? 2 : 0;
+        int canalFin = (modeCouleur == 3) ? 3 : nbCanaux;
+
+        for (int c = canalDebut; c < canalFin; c++) {
+            int[] hist = new int[256];
+            int total = 0;
+            for (int i = c; i < pixels.length; i += nbCanaux) {
+                int val = pixels[i];
+                if (val >= 0 && val <= 255) { hist[val]++; total++; }
+            }
+            int[] cdf = new int[256];
+            cdf[0] = hist[0];
+            for (int i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
+            
+            int cdfMin = 0;
+            for (int i = 0; i < 256; i++) {
+                if (cdf[i] > 0) { cdfMin = cdf[i]; break; }
+            }
+            if (total - cdfMin <= 0) continue;
+            for (int i = c; i < pixels.length; i += nbCanaux) {
+                int val = pixels[i];
+                if (val >= 0 && val <= 255) {
+                    pixels[i] = Math.round(((float)(cdf[val] - cdfMin) / (total - cdfMin)) * 255);
+                }
+            }
+        }
+    }
+
+    // Chargement et Filtrage basé sur la logique textuelle globale (Avec Augmentation optionnelle)
+    public static void chargerDonnees(String repertoire, int limiteParClasse, boolean estTrain, 
+                                      boolean normaliser, int modeCouleur, 
+                                      boolean appliquerMiroir, boolean appliquerEgalisation,
+                                      List<float[]> entrees, List<Integer> labels) 
+    {
+        List<String> tousLesChemins = listeFichiers(repertoire);
+        if (tousLesChemins == null || tousLesChemins.isEmpty()) return;
+        int cptChats = 0, cptChiens = 0, cptSauvages = 0;
+        for (String chemin : tousLesChemins) {
+            int labelReel = LabelInconnu;
+            
+            if (chemin.contains("cat")) {
+                if (estTrain && cptChats >= limiteParClasse) continue;
+                labelReel = LabelChat;
+                if (estTrain) cptChats++;
+            } else if (chemin.contains("dog")) {
+                if (estTrain && cptChiens >= limiteParClasse) continue;
+                labelReel = LabelChien;
+                if (estTrain) cptChiens++;
+            } else if (chemin.contains("wild") || chemin.contains("sauvage")) {
+                if (estTrain && cptSauvages >= limiteParClasse) continue;
+                labelReel = LabelWild;
+                if (estTrain) cptSauvages++;
+            } else {
+                continue;
+            }
+
+            Image img = new Image(chemin, labelReel, modeCouleur);
+            if (img.donnees() == null) continue;
+            
+            int[] d = img.donnees();
+            
+            // Application de l'égalisation si demandée
+            if (appliquerEgalisation) {
+                egaliserHistogramme(d, modeCouleur);
+            }
+            
+            // Préparation du vecteur d'entrée
+            float[] entree = new float[d.length];
+            for (int j = 0; j < d.length; j++) {
+                // NORMALISATION : On divise par 255 pour ramener les valeurs entre 0 et 1.
+                entree[j] = normaliser ? d[j] / 255.0f : (float) d[j];
+            }
+            entrees.add(entree);
+            labels.add(labelReel);
+
+            // Augmentation Miroir (On ne l'applique qu'à l'entraînement pour ne pas fausser le test final)
+            if (estTrain && appliquerMiroir) {
+                int[] dMiroir = creerMiroir(d, img.largeur(), img.hauteur(), modeCouleur);
+                float[] entreeMiroir = new float[dMiroir.length];
+                for (int j = 0; j < dMiroir.length; j++) {
+                    entreeMiroir[j] = normaliser ? dMiroir[j] / 255.0f : (float) dMiroir[j];
+                }
+                entrees.add(entreeMiroir);
+                labels.add(labelReel);
+            }
+        }
+        if (estTrain) {
+            System.out.printf("  Images lues : %d Chats, %d Chiens, %d Sauvages. (Total vecteurs générés : %d)\n", 
+                cptChats, cptChiens, cptSauvages, entrees.size());
+        } else {
+            System.out.printf("  Images de test chargees : %d fichiers au total.\n", entrees.size());
+        }
+    }
+
+    // Entraînement des experts avec critère MSE (Erreur Quadratique Moyenne)
+    public static iNeurone[] entrainer(int choixFonction, int nbEntrees, float[][] toutesEntrees, List<Integer> labels, float eta) {
+        String nomFonction = choixFonction == 1 ? "HEAVISIDE" : choixFonction == 2 ? "SIGMOIDE" : "RELU";
+        System.out.println("\n--- ENTRAINEMENT (" + nomFonction + ") ---");
+        // On règle le pas d'apprentissage (learning rate). S'il est trop grand, l'algo va sauter au-dessus de la solution idéale. S'il est trop petit, l'apprentissage sera très lent.
+        Neurone.fixeCoefApprentissage(eta);
+        //On crée 3 neurones experts, [0] = Expert Chat, [1] = Expert Chien, [2] = Expert Sauvage
+        iNeurone[] neurones = new iNeurone[3];
+        for (int k = 0; k < 3; k++) {
+            switch (choixFonction) {
+                case 1: neurones[k] = new NeuroneHeavyside(nbEntrees); break;
+                case 2: neurones[k] = new NeuroneSigmoide(nbEntrees);  break;
+                case 3: neurones[k] = new NeuroneReLU(nbEntrees);      break;
+                default: neurones[k] = new NeuroneSigmoide(nbEntrees);
+            }
+        }
+        // On entraîne chaque expert indépendamment. L'apprentissage s'arrête quand l'erreur (MSE) devient inférieure à 0.05f.
+        System.out.println("  Entrainement de l'Expert CHAT...");
+        neurones[0].apprentissage(toutesEntrees, consignes(labels, LabelChat), 0.10f);
+        System.out.println("  Entrainement de l'Expert CHIEN...");
+        neurones[1].apprentissage(toutesEntrees, consignes(labels, LabelChien), 0.10f);
+        System.out.println("  Entrainement de l'Expert SAUVAGE...");
+        neurones[2].apprentissage(toutesEntrees, consignes(labels, LabelWild), 0.10f);
+        return neurones;
+    }
+
+    // Évaluation : On teste nos 3 experts sur les images de test jamais vues pendant l'entraînement.
+    public static float evaluer(iNeurone[] neurones, List<float[]> testEntrees, List<Integer> testLabels, boolean afficherResultat) {
+        int correct = 0;
+        for (int i = 0; i < testEntrees.size(); i++) {
+            neurones[0].metAJour(testEntrees.get(i)); float scoreChat = neurones[0].sortie();
+            neurones[1].metAJour(testEntrees.get(i)); float scoreChien = neurones[1].sortie();
+            neurones[2].metAJour(testEntrees.get(i)); float scoreSauvage = neurones[2].sortie();
+            // On regarde quel expert a le score le plus haut. C'est lui qui détermine la prédiction finale de notre système.
+            int prediction = LabelChat;
+            float maxScore = scoreChat;
+            if (scoreChien > maxScore) { maxScore = scoreChien; prediction = LabelChien; }
+            if (scoreSauvage > maxScore) { maxScore = scoreSauvage; prediction = LabelWild; }
+            int labelReel = testLabels.get(i);
+            if (prediction == labelReel) correct++;
+        }
+        float precision = (float) correct / testEntrees.size() * 100;
+
+        if (afficherResultat) {
+            System.out.println("\n--------------------------------------------------");
+            System.out.printf("PRECISION GLOBALE DU MODELE : %.2f %%\n", precision);
+            System.out.println("--------------------------------------------------");
+        }
+        return precision;
+    }
+ 
+    // --- LE PROGRAMME PRINCIPAL ---
     public static void main (String[] args)
     {
         Scanner clavier = new Scanner(System.in);
-        clavier.useLocale(Locale.US); 
-        
+        clavier.useLocale(Locale.US);
         System.out.println("==================================================");
-        System.out.println("  BIENVENUE DANS L'ENTRAINEMENT DE L'IA");
+        System.out.println("  PROJET IA : CHATS vs CHIENS vs SAUVAGES");
         System.out.println("==================================================");
-        
-        System.out.println(" Quelle fonction d'activation voulez-vous utiliser ?");
-        System.out.println("  1 - HEAVISIDE (Basique, sortie binaire 0 ou 1)");
-        System.out.println("  2 - SIGMOIDE  (Tres stable, bornee entre 0 et 1)");
-        System.out.println("  3 - RELU      (Puissante mais risque d'explosion)");
-        System.out.print("\n Votre choix (1, 2 ou 3) : ");
-        int choixFonction = clavier.nextInt(); 
 
-        // --- NOUVEAUTÉ : CHOIX DU NOMBRE D'IMAGES POUR RELU ---
-        int limiteRelu = 2000; // Valeur par défaut de sécurité
-        if (choixFonction == 3) {
-            System.out.println("\n [OPTION RELU] Pour eviter une surcharge memoire, il est conseille de reduire le dataset.");
-            System.out.print(" Combien d'images par classe (Chats/Chiens) voulez-vous utiliser ? (ex: 2000) : ");
-            limiteRelu = clavier.nextInt();
-        }
-
-        float coefDefaut = 0.0f;
-        if (choixFonction == 1) coefDefaut = 0.005f;
-        else if (choixFonction == 2) coefDefaut = 0.01f;
-        else if (choixFonction == 3) coefDefaut = 0.001f;
-
-        System.out.println("\n Quel coefficient d'apprentissage voulez-vous utiliser ?");
-        System.out.println("  (Tapez 0 pour utiliser la valeur par defaut : " + coefDefaut + ")");
-        System.out.println("  (Ou tapez votre valeur personnalisee, ex: 0.1, 0.0001...)");
-        System.out.print(" Votre choix : ");
+        System.out.println(" Quelle fonction d'activation ?");
+        System.out.println("  1 - HEAVISIDE");
+        System.out.println("  2 - SIGMOIDE");
+        System.out.println("  3 - RELU");
+        System.out.print(" Votre choix (1, 2 ou 3) : ");
+        int choixFonction = clavier.nextInt();
+ 
+        System.out.print("\n Combien d'images MAX par classe au depart ? (Ex: 2000) : ");
+        int limiteImages = clavier.nextInt();
+ 
+        float coefDefaut = (choixFonction == 1) ? 0.005f : (choixFonction == 2) ? 0.001f : 0.001f;
+        System.out.println("\n Quel coefficient d'apprentissage ? (Tapez 0 pour le defaut : " + coefDefaut + ") : ");
         float saisieCoef = clavier.nextFloat();
-        
         float coefFinal = (saisieCoef == 0.0f) ? coefDefaut : saisieCoef;
-
-        System.out.println("\n Quel mode d'execution souhaitez-vous ?");
-        System.out.println("  1 - Mode Classique (Details, Matrice de confusion, Sauvegarde)");
-        System.out.println("  2 - Mode Export Excel (Sauvegarde dans un fichier a la fin)");
-        System.out.print("\n Votre choix (1 ou 2) : ");
+ 
+        System.out.println("\n Quel mode d'execution ?");
+        System.out.println("  1 - Mode Classique (Calcul du score)");
+        System.out.println("  2 - Mode Export Excel (Plusieurs runs)");
+        System.out.print(" Votre choix (1 ou 2) : ");
         int choixMode = clavier.nextInt();
-
+ 
         int nbRuns = 1;
         if (choixMode == 2) {
-            System.out.print("\n Combien de tests (runs) voulez-vous generer pour Excel ? : ");
+            System.out.print(" Combien de runs pour Excel ? : ");
             nbRuns = clavier.nextInt();
         }
-        
-        System.out.println("\n Voulez-vous melanger les donnees d'entrainement (Aleatoire) ?");
-        System.out.println("  1 - Oui (Recommande)");
-        System.out.println("  2 - Non (Pour tester l'impact de l'ordre)");
-        System.out.print("\n Votre choix (1 ou 2) : ");
+       
+        System.out.print("\n Melanger les donnees aleatoirement ? (1=Oui, 2=Non) : ");
         int choixAleatoire = clavier.nextInt();
-
-        System.out.println("\n Voulez-vous normaliser les pixels (entre 0 et 1) ?");
-        System.out.println("  1 - Oui (Recommande, division par 255)");
-        System.out.println("  2 - Non (Garder les valeurs de 0 a 255)");
-        System.out.print("\n Votre choix (1 ou 2) : ");
+ 
+        System.out.print(" Normaliser les pixels entre 0 et 1 ? (1=Oui, 2=Non) : ");
         int choixNormalisation = clavier.nextInt();
-
-        System.out.println("\n Quel format de representation pour les images ?");
-        System.out.println("  1 - Niveaux de gris (Noir et blanc)");
-        System.out.println("  2 - RGB (Couleurs, 3x plus d'entrees)");
-        System.out.println("  3 - TSL (Teinte, Saturation, Luminosite, 3x plus d'entrees)");
-        System.out.print("\n Votre choix (1, 2 ou 3) : ");
+ 
+        System.out.println("\n Format d'image ?");
+        System.out.println("  1 - Niveaux de gris");
+        System.out.println("  2 - RGB (Couleurs)");
+        System.out.println("  3 - TSL (Teinte, Saturation, Luminosite)");
+        System.out.print(" Votre choix (1, 2 ou 3) : ");
         int choixCouleur = clavier.nextInt();
-
+        boolean normaliser = (choixNormalisation == 1);
+        
+        // --- MENUS AUGMENTATION DE DONNEES ---
+        System.out.print("\n Activer l'augmentation par Effet Miroir ? (1=Oui, 2=Non) : ");
+        boolean appliquerMiroir = (clavier.nextInt() == 1);
+        System.out.print(" Activer l'Égalisation d'histogramme ? (1=Oui, 2=Non) : ");
+        boolean appliquerEgalisation = (clavier.nextInt() == 1);
         System.out.println("==================================================\n");
-
-        List<String> tousLesCheminsTrain = listeFichiers("../../dataset_animaux/train/");
-        if (tousLesCheminsTrain == null || tousLesCheminsTrain.isEmpty()) {
-            System.out.println("Erreur : Aucune image d'entrainement trouvee.");
-            return;
-        }
-
-        // --- FILTRAGE AVEC LA LIMITE CHOISIE PAR L'UTILISATEUR ---
-        List<String> cheminsTrain = new ArrayList<>();
-        int maxImagesParClasse = (choixFonction == 3) ? limiteRelu : Integer.MAX_VALUE;
-        int compteurChats = 0;
-        int compteurChiens = 0;
-
-        for (String chemin : tousLesCheminsTrain) {
-            if (chemin.contains("cat") && compteurChats < maxImagesParClasse) {
-                cheminsTrain.add(chemin);
-                compteurChats++;
-            } else if (chemin.contains("dog") && compteurChiens < maxImagesParClasse) {
-                cheminsTrain.add(chemin);
-                compteurChiens++;
-            }
-        }
-        int nbImagesTrain = cheminsTrain.size();
-        
-        if (nbImagesTrain == 0) {
-            System.out.println("Erreur : Aucune image trouvee pour cette configuration.");
-            return;
-        }
-
-        Image premiereImage = new Image(cheminsTrain.get(0), LabelChat, choixCouleur);
-        int nbEntrees = premiereImage.taille(); 
-
-        String dossierTest = "../../dataset_animaux/test/";
-        List<String> cheminsTest = listeFichiers(dossierTest);
-        
-        List<String> cheminsTestFiltres = new ArrayList<>();
-        if (cheminsTest != null) {
-            for (String chemin : cheminsTest) {
-                if (chemin.contains("cat") || chemin.contains("dog")) {
-                    cheminsTestFiltres.add(chemin);
-                }
-            }
-        }
-        int nbImagesTest = cheminsTestFiltres.size();
-
+ 
+        // Chemins d'accès relatifs
+        String baseTrain = "../../dataset_animaux/train/";
+        String baseTest = "../../dataset_animaux/test/";
+ 
+        // --- LECTURE DU DOSSIER TEST ---
+        System.out.println("--- CHARGEMENT TEST ---");
+        List<float[]> testEntrees = new ArrayList<>();
+        List<Integer> testLabels  = new ArrayList<>();
+        // On n'applique JAMAIS le miroir sur le dataset de test pour ne pas fausser l'évaluation !
+        chargerDonnees(baseTest, Integer.MAX_VALUE, false, normaliser, choixCouleur, false, appliquerEgalisation, testEntrees, testLabels);
+ 
         // =========================================================================
-        // MODE 1 : CLASSIQUE (MATRICE DE CONFUSION)
+        // MODE 1 : CLASSIQUE
         // =========================================================================
         if (choixMode == 1) {
-            System.out.println("--- DEBUT DE LA PHASE D'ENTRAINEMENT ---");
-            System.out.println(nbImagesTrain + " images pretes pour l'entrainement.");
-            if (choixFonction == 3) {
-                System.out.println("(Limite de " + limiteRelu + " images par classe appliquee)");
+            System.out.println("\n--- CHARGEMENT TRAIN ---");
+            List<float[]> trainEntrees = new ArrayList<>();
+            List<Integer> trainLabels  = new ArrayList<>();
+            chargerDonnees(baseTrain, limiteImages, true, normaliser, choixCouleur, appliquerMiroir, appliquerEgalisation, trainEntrees, trainLabels);
+
+            if (trainEntrees.isEmpty()) {
+                System.out.println("Erreur : Aucune image d'entrainement chargee.");
+                clavier.close();
+                return;
             }
-            
+
+            int nbEntrees = trainEntrees.get(0).length;
+            // Conversion de la liste vers un tableau 2D pour respecter la signature de apprentissage() de iNeurone
+            float[][] toutesEntrees = trainEntrees.toArray(new float[0][]);
+ 
             if (choixAleatoire == 1) {
-                Collections.shuffle(cheminsTrain); 
-                System.out.println("Melange aleatoire active.");
-            } else {
-                System.out.println("Melange aleatoire DESACTIVE.");
+                melanger(toutesEntrees, trainLabels, 42L);
             }
-
-            float[][] toutesLesEntrees = new float[nbImagesTrain][nbEntrees];
-            float[] toutesLesConsignes = new float[nbImagesTrain];
-
-            System.out.println("Chargement des images d'entrainement...");
-            for (int i = 0; i < nbImagesTrain; i++) {
-                String chemin = cheminsTrain.get(i);
-                boolean estUnChat = chemin.contains("cat");
-                float consigne = estUnChat ? (float)LabelChat : (float)LabelChien;
-                toutesLesConsignes[i] = consigne;
-                
-                Image img = new Image(chemin, estUnChat ? LabelChat : LabelChien, choixCouleur);
-                int[] pixelsBruts = img.donnees();
-                
-                for (int j = 0; j < nbEntrees; j++) {
-                    toutesLesEntrees[i][j] = (choixNormalisation == 1) ? (pixelsBruts[j] / 255.0f) : (float) pixelsBruts[j];
-                }
-            }
-
-            iNeurone monNeurone = null;
-            String fichierSauvegarde = "";
-            String nomFonction = "";
-
-            switch (choixFonction) {
-                case 1: monNeurone = new NeuroneHeavyside(nbEntrees); fichierSauvegarde = "cerveau_heaviside.txt"; nomFonction = "HEAVISIDE"; break;
-                case 2: monNeurone = new NeuroneSigmoide(nbEntrees); fichierSauvegarde = "cerveau_sigmoide.txt"; nomFonction = "SIGMOIDE"; break;
-                case 3: monNeurone = new NeuroneReLU(nbEntrees); fichierSauvegarde = "cerveau_relu.txt"; nomFonction = "RELU"; break;
-            }
-            
-            Neurone.fixeCoefApprentissage(coefFinal);
-
-            System.out.println("\nConfiguration du neurone activee avec : " + nomFonction);
-            System.out.println("Coefficient d'apprentissage applique : " + coefFinal);
-            System.out.println("Apprentissage en cours (tolerance a 5%)...");
-            
-            monNeurone.apprentissage(toutesLesEntrees, toutesLesConsignes, 0.05f); 
-            monNeurone.sauvegarde(fichierSauvegarde);
-            System.out.println("Modele sauvegarde avec succes dans : " + fichierSauvegarde + "\n");
-
-            System.out.println("--- DEBUT DE LA PHASE DE TEST ---");
-            System.out.println(nbImagesTest + " images d'examen trouvees.");
-
-            int bonnesReponses = 0;
-            int vraisChats = 0, fauxChiens = 0;
-            int vraisChiens = 0, fauxChats = 0;
-            
-            System.out.println("Evaluation globale en cours...");
-            for (int i = 0; i < nbImagesTest; i++) {
-                String path = cheminsTestFiltres.get(i);
-                boolean estUnChat = path.contains("cat");
-                float reponseAttendue = estUnChat ? (float)LabelChat : (float)LabelChien;
-
-                Image img = new Image(path, estUnChat ? LabelChat : LabelChien, choixCouleur);
-                int[] pixelsBruts = img.donnees();
-                float[] pixelsNormalises = new float[nbEntrees];
-                
-                for (int j = 0; j < nbEntrees; j++) {
-                    pixelsNormalises[j] = (choixNormalisation == 1) ? (pixelsBruts[j] / 255.0f) : (float) pixelsBruts[j];
-                }
-
-                monNeurone.metAJour(pixelsNormalises);
-                float predictionBrute = monNeurone.sortie();
-                float predictionFinale = (predictionBrute >= 0.5f) ? (float)LabelChien : (float)LabelChat;
-
-                if (estUnChat) {
-                    if (predictionFinale == (float)LabelChat) vraisChats++; else fauxChiens++;
-                } else {
-                    if (predictionFinale == (float)LabelChien) vraisChiens++; else fauxChats++;
-                }
-                if (predictionFinale == reponseAttendue) { bonnesReponses++; }
-            }
-
-            System.out.println("\n--------------------------------------------------");
-            System.out.println("RESULTATS DE L'EXAMEN FINAL (" + nomFonction + ")");
-            System.out.println("--------------------------------------------------");
-            System.out.println("Bonnes reponses : " + bonnesReponses + " / " + nbImagesTest);
-            float precision = ((float) bonnesReponses / nbImagesTest) * 100;
-            System.out.printf("PRECISION DU MODELE : %.2f %%\n", precision);
-
-            System.out.println("\n--- MATRICE DE CONFUSION ---");
-            System.out.println(" Le neurone a reconnu " + vraisChats + " vrais chats.");
-            System.out.println(" Le neurone a reconnu " + vraisChiens + " vrais chiens.");
-            System.out.println(" PIEGES : Il a pris " + fauxChiens + " chats pour des chiens.");
-            System.out.println(" PIEGES : Il a pris " + fauxChats + " chiens pour des chats.");
+ 
+            // Entraînement
+            iNeurone[] neurones = entrainer(choixFonction, nbEntrees, toutesEntrees, trainLabels, coefFinal);
+            // Évaluation (Calcul de la précision sur les données inconnues)
+            System.out.println("\n--- DEBUT DU TEST SUR " + testEntrees.size() + " IMAGES ---");
+            evaluer(neurones, testEntrees, testLabels, true);
         }
-        
+       
         // =========================================================================
-        // MODE 2 : LA BOUCLE POUR EXCEL
+        // MODE 2 : EXPORT EXCEL
         // =========================================================================
         else if (choixMode == 2) {
-            System.out.println(" L'entrainement tourne. (Coefficient: " + coefFinal + ")");
-            System.out.println(" Les logs du neurone vont s'afficher, c'est normal.");
-            System.out.println(" Veuillez patienter jusqu'a la fin de la barre de progression virtuelle...\n");
-            
+            System.out.println(" Les 3 experts s'entrainent " + nbRuns + " fois. Veuillez patienter...\n");
             List<String> resultatsPourExcel = new ArrayList<>();
-            resultatsPourExcel.add("Run;Precision"); 
-
+            resultatsPourExcel.add("Run;Precision");
+ 
             for (int run = 1; run <= nbRuns; run++) {
+                System.out.println("\n=== RUN " + run + " / " + nbRuns + " ===");
                 
+                List<float[]> trainEntrees = new ArrayList<>();
+                List<Integer> trainLabels  = new ArrayList<>();
+                chargerDonnees(baseTrain, limiteImages, true, normaliser, choixCouleur, appliquerMiroir, appliquerEgalisation, trainEntrees, trainLabels);
+ 
+                int nbEntrees = trainEntrees.get(0).length;
+                float[][] toutesEntrees = trainEntrees.toArray(new float[0][]);
+ 
                 if (choixAleatoire == 1) {
-                    Collections.shuffle(cheminsTrain); 
+                    // On change la graine à chaque run pour avoir un mélange différent et voir la robustesse
+                    melanger(toutesEntrees, trainLabels, new Random().nextLong());
                 }
+ 
+                iNeurone[] neurones = entrainer(choixFonction, nbEntrees, toutesEntrees, trainLabels, coefFinal);
+                float precision = evaluer(neurones, testEntrees, testLabels, false);
                 
-                float[][] toutesLesEntrees = new float[nbImagesTrain][nbEntrees];
-                float[] toutesLesConsignes = new float[nbImagesTrain];
-
-                for (int i = 0; i < nbImagesTrain; i++) {
-                    String chemin = cheminsTrain.get(i);
-                    boolean estUnChat = chemin.contains("cat");
-                    float consigne = estUnChat ? (float)LabelChat : (float)LabelChien;
-                    toutesLesConsignes[i] = consigne;
-                    
-                    Image img = new Image(chemin, estUnChat ? LabelChat : LabelChien, choixCouleur);
-                    int[] pixelsBruts = img.donnees();
-                    
-                    for (int j = 0; j < nbEntrees; j++) {
-                        toutesLesEntrees[i][j] = (choixNormalisation == 1) ? (pixelsBruts[j] / 255.0f) : (float) pixelsBruts[j];
-                    }
-                }
-
-                iNeurone monNeurone = null;
-                switch (choixFonction) {
-                    case 1: monNeurone = new NeuroneHeavyside(nbEntrees); break;
-                    case 2: monNeurone = new NeuroneSigmoide(nbEntrees); break;
-                    case 3: monNeurone = new NeuroneReLU(nbEntrees); break;
-                }
-
-                Neurone.fixeCoefApprentissage(coefFinal);
-                monNeurone.apprentissage(toutesLesEntrees, toutesLesConsignes, 0.05f); 
-
-                int bonnesReponses = 0;
-                for (int i = 0; i < nbImagesTest; i++) {
-                    String path = cheminsTestFiltres.get(i);
-                    boolean estUnChat = path.contains("cat");
-                    float reponseAttendue = estUnChat ? (float)LabelChat : (float)LabelChien;
-
-                    Image img = new Image(path, estUnChat ? LabelChat : LabelChien, choixCouleur);
-                    int[] pixelsBruts = img.donnees();
-                    float[] pixelsNormalises = new float[nbEntrees];
-                    
-                    for (int j = 0; j < nbEntrees; j++) {
-                        pixelsNormalises[j] = (choixNormalisation == 1) ? (pixelsBruts[j] / 255.0f) : (float) pixelsBruts[j];
-                    }
-
-                    monNeurone.metAJour(pixelsNormalises);
-                    float predictionBrute = monNeurone.sortie();
-                    float predictionFinale = (predictionBrute >= 0.5f) ? (float)LabelChien : (float)LabelChat;
-
-                    if (predictionFinale == reponseAttendue) {
-                        bonnesReponses++;
-                    }
-                }
-
-                float precision = ((float) bonnesReponses / nbImagesTest) * 100;
-                String ligne = String.format(Locale.FRENCH, "%d;%.2f", run, precision);
-                resultatsPourExcel.add(ligne);
+                System.out.printf("Run %d : %.2f%%\n", run, precision);
+                resultatsPourExcel.add(String.format(Locale.FRENCH, "%d;%.2f", run, precision));
             }
-
-            System.out.println("\n\n\n==================================================");
-            System.out.println("  RESULTATS PRETS POUR EXCEL");
+ 
+            System.out.println("\n==================================================");
+            System.out.println("  RÉSULTATS POUR EXCEL");
             System.out.println("==================================================");
             for (String ligne : resultatsPourExcel) {
                 System.out.println(ligne);
             }
-            System.out.println("==================================================");
-
+ 
             try {
+                // Création du fichier CSV pour exploiter les résultats (générer des graphes pour le rapport par ex)
                 FileWriter writer = new FileWriter("resultats_excel.csv");
-                for (String ligne : resultatsPourExcel) {
-                    writer.write(ligne + "\n");
-                }
+                for (String ligne : resultatsPourExcel) writer.write(ligne + "\n");
                 writer.close();
-                System.out.println(" SUCCES : Un fichier 'resultats_excel.csv' a ete cree dans votre dossier !");
-                System.out.println("   Vous pouvez l'ouvrir directement avec Excel.");
-            } catch (IOException e) {
-                System.out.println("Erreur lors de la creation du fichier CSV, utilisez le bloc ci-dessus.");
+                System.out.println("\nFichier 'resultats_excel.csv' cree avec succes !");
+            } catch (IOException e) { 
+                System.out.println("Erreur lors de la creation du fichier CSV.");
             }
         }
-
-        clavier.close(); 
+ 
+        clavier.close();
     }
 }
